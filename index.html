@@ -22,39 +22,52 @@
   </div>
 
   <script>
-    // TRVE (Base) — on garde la série AVG (BASE) comme dans ton graphe d'origine
-    const trveUrl = "https://raw.githubusercontent.com/FEPPN/graph_historical_TRVE/main/data.json"; // champs: Date, AVG (BASE)
-    // Concurrents HC (particuliers) — JSON avec: Date, CompetitorAVG_HC
-    const competitorsUrl = "https://raw.githubusercontent.com/FEPPN/competitors-hc-kwh-graph/main/data_competitors_hc.json";
+    const trveUrl = "https://raw.githubusercontent.com/FEPPN/graph_historical_TRVE/main/data.json"; // Date, BASE/AVG
+    const competitorsUrl = "https://raw.githubusercontent.com/FEPPN/competitors-hc-kwh-graph/main/data_competitors_hc.json"; // Date, CompetitorAVG_HC
+
+    // Fenêtre stricte
+    const START_AT = "2024-07";
+    const END_AT   = "2025-10";
 
     const ymKey = d => { const dt=new Date(d); return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0"); };
     const ymToLabel = k => { const [y,m]=k.split("-"); return new Date(+y,+m-1,1).toLocaleDateString("fr-FR",{year:"numeric",month:"2-digit"}); };
+
+    function monthRange(startYm, endYm){
+      const [sy, sm] = startYm.split("-").map(Number);
+      const [ey, em] = endYm.split("-").map(Number);
+      const res = []; let y = sy, m = sm;
+      while (y < ey || (y === ey && m <= em)) { res.push(y + "-" + String(m).padStart(2,"0")); m++; if (m>12){m=1;y++;} }
+      return res;
+    }
 
     Promise.all([
       fetch(trveUrl+"?v="+Date.now(),{cache:"no-store"}).then(r=>r.json()),
       fetch(competitorsUrl+"?v="+Date.now(),{cache:"no-store"}).then(r=>r.json())
     ])
     .then(([trveRows, compRows])=>{
-      // TRVE: on prend uniquement AVG (BASE)
-      const trveIdx = {};
-      (trveRows||[])
-        .filter(r=>r.Date && typeof r.AVG==="number")
-        .forEach(r=>{ trveIdx[ymKey(r.Date)] = r.AVG; });
+      // TRVE ponctuel -> mensuel (carry-forward)
+      const trvePoints = (trveRows||[])
+        .filter(r=>r.Date && (typeof r.BASE==="number" || typeof r.AVG==="number"))
+        .map(r=>[ymKey(r.Date), (typeof r.BASE==="number") ? r.BASE : r.AVG])
+        .sort((a,b)=>a[0].localeCompare(b[0]));
 
-      // Concurrents HC: on lit CompetitorAVG_HC
+      const months = monthRange(START_AT, END_AT);
+
+      const valueAtMonth = (k)=>{
+        let last=null;
+        for(const [kk,vv] of trvePoints){ if(kk<=k) last=vv; else break; }
+        return last;
+      };
+
+      const labels   = months.map(ymToLabel);
+      const trveVals = months.map(valueAtMonth);
+
+      // Concurrents HC, alignés sur les mêmes mois
       const compIdx = {};
       (compRows||[]).forEach(r=>{
         const v = (typeof r.CompetitorAVG_HC==="number") ? r.CompetitorAVG_HC : Number(String(r.CompetitorAVG_HC).replace(",","."));
         if(!Number.isNaN(v) && r.Date) compIdx[ymKey(r.Date)] = v;
       });
-
-      // Union des mois pour tout afficher puis filtre >= 2024-01
-      let months = Array.from(new Set([...Object.keys(trveIdx), ...Object.keys(compIdx)])).sort();
-      const START_AT = "2024-01"; // YYYY-MM
-      months = months.filter(k => k >= START_AT);
-
-      const labels   = months.map(ymToLabel);
-      const trveVals = months.map(k => (k in trveIdx ? trveIdx[k] : null));
       const compVals = months.map(k => (k in compIdx ? compIdx[k] : null));
 
       const ctx = document.getElementById("chart").getContext("2d");
@@ -76,12 +89,12 @@
               borderWidth:1.6,
               pointRadius:0,
               spanGaps:true,
-              stepped:false,
-              tension:0.25,
+              stepped:'before',   // escalier
+              tension:0,
               fill:false
             },
             {
-              label:"Moyenne marché — Heures creuses (Engie / TotalEnergies / OHM Énergie / Primeo Énergie)",
+              label:"Moyenne marché — Heures creuses (Engie • TotalEnergies • OHM Énergie • Primeo Énergie)",
               data: compVals,
               borderColor:"#334155",
               backgroundColor:"transparent",
@@ -99,23 +112,34 @@
           responsive:true,
           interaction:{ mode:'nearest', intersect:false },
           plugins:{
-            legend:{
-              position:"bottom",
-              labels:{ color:"#1f2937", font:{ size:13, weight:"600" } }
-            },
+            legend:{ position:"bottom", labels:{ color:"#1f2937", font:{ size:13, weight:"600" } } },
             tooltip:{
               backgroundColor:"#fff", borderColor:"#e5e7eb", borderWidth:1,
               titleColor:"#111827", bodyColor:"#4b5563",
               titleFont:{ weight:'700' }, bodyFont:{ weight:'500' },
               padding:10, cornerRadius:10,
               callbacks:{
-                label:(ctx)=>`${ctx.dataset.label} : ${typeof ctx.parsed.y==="number"?ctx.parsed.y.toFixed(4)+" € / kWh TTC":"—"}`
+                label:(ctx)=>{
+                  const y = ctx.parsed.y;
+                  if (typeof y !== "number") return `${ctx.dataset.label} : —`;
+                  return `${ctx.dataset.label} : ${y.toFixed(4).replace('.',',')} € / kWh TTC`;
+                }
               }
             }
           },
           scales:{
-            y:{ ticks:{ color:"#6b7280", callback:v=>`${Number(v).toFixed(3)} €` }, grid:{ color:"rgba(0,0,0,0.06)" }, border:{ display:false } },
-            x:{ offset:true, ticks:{ color:"#6b7280", maxRotation:0, autoSkip:true, maxTicksLimit:12 }, grid:{ display:false }, border:{ display:false } }
+            y:{
+              min:0.1,
+              ticks:{ color:"#6b7280", callback:v=>`${Number(v).toFixed(3).replace('.',',')} €` },
+              grid:{ color:"rgba(0,0,0,0.06)" },
+              border:{ display:false }
+            },
+            x:{
+              offset:true,
+              ticks:{ color:"#6b7280", maxRotation:0, autoSkip:true, maxTicksLimit:12 },
+              grid:{ display:false },
+              border:{ display:false }
+            }
           }
         }
       });
