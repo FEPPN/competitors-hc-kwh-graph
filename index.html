@@ -22,7 +22,6 @@
   </div>
 
   <script>
-    // 👇 Remplace "TON_REPO_HC" par le nom de ton repo GitHub pour les données HC
     const REPO = "FEPPN/competitors-hc-kwh-graph";
 
     const trveUrl        = `https://cdn.jsdelivr.net/gh/${REPO}@main/data/data_TRVE_HC.csv`;
@@ -32,15 +31,29 @@
     const currentDate = new Date();
     const END_AT = currentDate.getFullYear() + "-" + String(currentDate.getMonth() + 1).padStart(2, "0");
 
-    const ymKey = d => { const dt=new Date(d); return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0"); };
-    const ymToLabel = k => { const [y,m]=k.split("-"); return new Date(+y,+m-1,1).toLocaleDateString("fr-FR",{year:"numeric",month:"2-digit"}); };
+    // Supporte DD/MM/YYYY et YYYY-MM-DD
+    const ymKey = d => {
+      let dt;
+      if (typeof d === "string" && d.includes("/")) {
+        const [day, month, year] = d.split("/");
+        dt = new Date(+year, +month - 1, +day);
+      } else {
+        dt = new Date(d);
+      }
+      return dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0");
+    };
 
-    function monthRange(startYm, endYm){
+    const ymToLabel = k => {
+      const [y, m] = k.split("-");
+      return new Date(+y, +m - 1, 1).toLocaleDateString("fr-FR", { year: "numeric", month: "2-digit" });
+    };
+
+    function monthRange(startYm, endYm) {
       const [sy, sm] = startYm.split("-").map(Number);
       const [ey, em] = endYm.split("-").map(Number);
       const res = []; let y = sy, m = sm;
       while (y < ey || (y === ey && m <= em)) {
-        res.push(y + "-" + String(m).padStart(2,"0"));
+        res.push(y + "-" + String(m).padStart(2, "0"));
         m++; if (m > 12) { m = 1; y++; }
       }
       return res;
@@ -63,25 +76,28 @@
       return result;
     }
 
+    // Nettoie une valeur : retire €, espaces, remplace virgule par point
+    const cleanVal = v => Number(String(v).replace(",", ".").replace("€", "").trim());
+
     Promise.all([
-      fetch(trveUrl+"?v="+Date.now(),{cache:"no-store"}).then(r=>r.text()),
-      fetch(competitorsUrl+"?v="+Date.now(),{cache:"no-store"}).then(r=>r.text())
+      fetch(trveUrl + "?v=" + Date.now(), { cache: "no-store" }).then(r => r.text()),
+      fetch(competitorsUrl + "?v=" + Date.now(), { cache: "no-store" }).then(r => r.text())
     ])
-    .then(([trveCsvText, compCsvText])=>{
+    .then(([trveCsvText, compCsvText]) => {
       const trveRows = parseCSV(trveCsvText);
       const compRows = parseCSV(compCsvText);
 
-      // TRVE — supporte DATE_DEBUT ou Date, et colonne HC ou BASE
+      // TRVE — date DD/MM/YYYY ou YYYY-MM-DD, colonne PART_VARIABLE_HC_TTC ou HC ou BASE
       const trvePoints = (trveRows || [])
         .filter(r => (r.DATE_DEBUT || r.Date) && (r.PART_VARIABLE_HC_TTC || r.HC || r.BASE) !== undefined)
         .map(r => {
           const dateKey = r.DATE_DEBUT || r.Date;
           const rawVal  = r.PART_VARIABLE_HC_TTC || r.HC || r.BASE;
-          const val = Number(String(rawVal).replace(",", "."));
+          const val = cleanVal(rawVal);
           return [ymKey(dateKey), val];
         })
-        .filter(r => !Number.isNaN(r[1]))
-        .sort((a,b) => a[0].localeCompare(b[0]));
+        .filter(r => !Number.isNaN(r[1]) && r[1] < 10)
+        .sort((a, b) => a[0].localeCompare(b[0]));
 
       const months = monthRange(START_AT, END_AT);
 
@@ -94,90 +110,90 @@
       const labels   = months.map(ymToLabel);
       const trveVals = months.map(valueAtMonth);
 
-      // Concurrents HC — supporte CompetitorAVG_HC ou CompetitorAVG
+      // Concurrents HC — colonne CompetitorAVG_HC ou CompetitorAVG
       const compIdx = {};
       (compRows || []).forEach(r => {
         const dateKey = r.DATE_DEBUT || r.Date;
         const rawVal  = r.CompetitorAVG_HC || r.CompetitorAVG;
-        const v = Number(String(rawVal).replace(",", "."));
-        if (!Number.isNaN(v) && dateKey) compIdx[ymKey(dateKey)] = v;
+        const v = cleanVal(rawVal);
+        if (!Number.isNaN(v) && v < 10 && dateKey) compIdx[ymKey(dateKey)] = v;
       });
       const compVals = months.map(k => (k in compIdx ? compIdx[k] : null));
 
       const ctx = document.getElementById("chart").getContext("2d");
-      const gTrve = ctx.createLinearGradient(0,0,0,300);
-      gTrve.addColorStop(0,"rgba(90, 82, 255, 0.22)");
-      gTrve.addColorStop(1,"rgba(90, 82, 255, 0.00)");
+      const gTrve = ctx.createLinearGradient(0, 0, 0, 300);
+      gTrve.addColorStop(0, "rgba(90, 82, 255, 0.22)");
+      gTrve.addColorStop(1, "rgba(90, 82, 255, 0.00)");
 
-      new Chart(ctx,{
-        type:'line',
-        data:{
+      new Chart(ctx, {
+        type: 'line',
+        data: {
           labels,
-          datasets:[
+          datasets: [
             {
-              label:"TRVE – Tarif réglementé HC (6 kVA)",
+              label: "TRVE – Tarif réglementé HC (6 kVA)",
               data: trveVals,
-              borderColor:"#5a52ff",
-              backgroundColor:gTrve,
-              borderWidth:1.6,
-              pointRadius:0,
-              spanGaps:true,
-              stepped:'before',
-              tension:0,
-              fill:false
+              borderColor: "#5a52ff",
+              backgroundColor: gTrve,
+              borderWidth: 1.6,
+              pointRadius: 0,
+              spanGaps: true,
+              stepped: 'before',
+              tension: 0,
+              fill: false
             },
             {
-              label:"Prix moyen offres de marché HC (Engie • TotalEnergies • OHM Énergie • Primeo Énergie)",
+              label: "Prix moyen offres de marché HC (Engie • TotalEnergies • OHM Énergie • Primeo Énergie)",
               data: compVals,
-              borderColor:"#334155",
-              backgroundColor:"transparent",
-              borderWidth:1.6,
-              borderDash:[6,4],
-              pointRadius:0,
-              spanGaps:true,
-              stepped:false,
-              tension:0.25,
-              fill:false
+              borderColor: "#334155",
+              backgroundColor: "transparent",
+              borderWidth: 1.6,
+              borderDash: [6, 4],
+              pointRadius: 0,
+              spanGaps: true,
+              stepped: false,
+              tension: 0.25,
+              fill: false
             }
           ]
         },
-        options:{
-          responsive:true,
-          interaction:{ mode:'nearest', intersect:false },
-          plugins:{
-            legend:{ position:"bottom", labels:{ color:"#1f2937", font:{ size:13, weight:"600" } } },
-            tooltip:{
-              backgroundColor:"#fff", borderColor:"#e5e7eb", borderWidth:1,
-              titleColor:"#111827", bodyColor:"#4b5563",
-              titleFont:{ weight:'700' }, bodyFont:{ weight:'500' },
-              padding:10, cornerRadius:10,
-              callbacks:{
-                label:(ctx)=>{
+        options: {
+          responsive: true,
+          interaction: { mode: 'nearest', intersect: false },
+          plugins: {
+            legend: { position: "bottom", labels: { color: "#1f2937", font: { size: 13, weight: "600" } } },
+            tooltip: {
+              backgroundColor: "#fff", borderColor: "#e5e7eb", borderWidth: 1,
+              titleColor: "#111827", bodyColor: "#4b5563",
+              titleFont: { weight: '700' }, bodyFont: { weight: '500' },
+              padding: 10, cornerRadius: 10,
+              callbacks: {
+                label: (ctx) => {
                   const y = ctx.parsed.y;
                   if (typeof y !== "number") return `${ctx.dataset.label} : —`;
-                  return `${ctx.dataset.label} : ${y.toFixed(4).replace('.',',')} € / kWh TTC`;
+                  return `${ctx.dataset.label} : ${y.toFixed(4).replace('.', ',')} € / kWh TTC`;
                 }
               }
             }
           },
-          scales:{
-            y:{
-              min:0.1,
-              ticks:{ color:"#6b7280", callback:v=>`${Number(v).toFixed(3).replace('.',',')} €` },
-              grid:{ color:"rgba(0,0,0,0.06)" },
-              border:{ display:false }
+          scales: {
+            y: {
+              min: 0.1,
+              ticks: { color: "#6b7280", callback: v => `${Number(v).toFixed(3).replace('.', ',')} €` },
+              grid: { color: "rgba(0,0,0,0.06)" },
+              border: { display: false }
             },
-            x:{
-              offset:true,
-              ticks:{ color:"#6b7280", maxRotation:0, autoSkip:true, maxTicksLimit:12 },
-              grid:{ display:false },
-              border:{ display:false }
+            x: {
+              offset: true,
+              ticks: { color: "#6b7280", maxRotation: 0, autoSkip: true, maxTicksLimit: 12 },
+              grid: { display: false },
+              border: { display: false }
             }
           }
         }
       });
     })
-    .catch(err=>{
+    .catch(err => {
       console.error(err);
       document.querySelector(".chart-wrapper").insertAdjacentHTML("beforeend",
         `<p style="margin-top:10px;color:#ef4444;text-align:center">Erreur de chargement des données.</p>`);
