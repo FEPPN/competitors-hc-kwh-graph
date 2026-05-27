@@ -8,7 +8,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
   <style>
     body{margin:0;overflow:hidden;background:#fff;font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;justify-content:center;padding:40px 16px;}
-    .chart-wrapper{background:transparent;border-radius:0;box-shadow:none;padding:0;}
+    .chart-wrapper{background:transparent;border-radius:0;box-shadow:none;padding:0;width:100%;max-width:900px;}
     h1{margin:0 0 14px;text-align:center;font-size:22px;font-weight:600;color:#0b0f19;}
     .legend-note{margin:2px 0 12px;text-align:center;color:#64748b;font-size:13px;}
     canvas{width:100% !important;height:auto !important;}
@@ -22,12 +22,15 @@
   </div>
 
   <script>
-    const trveUrl = "https://raw.githubusercontent.com/FEPPN/graph_historical_TRVE/main/data.json"; // Date, BASE/AVG
-    const competitorsUrl = "https://raw.githubusercontent.com/FEPPN/competitors-hc-kwh-graph/main/data_competitors_hc.json"; // Date, CompetitorAVG_HC
+    // 👇 Remplace "TON_REPO_HC" par le nom de ton repo GitHub pour les données HC
+    const REPO = "FEPPN/competitors-hc-kwh-graph";
 
-    // Fenêtre stricte
+    const trveUrl        = `https://cdn.jsdelivr.net/gh/${REPO}@main/data/data_TRVE_HC.csv`;
+    const competitorsUrl = `https://cdn.jsdelivr.net/gh/${REPO}@main/data/data_competitors_HC.csv`;
+
     const START_AT = "2024-07";
-    const END_AT   = "2025-10";
+    const currentDate = new Date();
+    const END_AT = currentDate.getFullYear() + "-" + String(currentDate.getMonth() + 1).padStart(2, "0");
 
     const ymKey = d => { const dt=new Date(d); return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0"); };
     const ymToLabel = k => { const [y,m]=k.split("-"); return new Date(+y,+m-1,1).toLocaleDateString("fr-FR",{year:"numeric",month:"2-digit"}); };
@@ -36,42 +39,72 @@
       const [sy, sm] = startYm.split("-").map(Number);
       const [ey, em] = endYm.split("-").map(Number);
       const res = []; let y = sy, m = sm;
-      while (y < ey || (y === ey && m <= em)) { res.push(y + "-" + String(m).padStart(2,"0")); m++; if (m>12){m=1;y++;} }
+      while (y < ey || (y === ey && m <= em)) {
+        res.push(y + "-" + String(m).padStart(2,"0"));
+        m++; if (m > 12) { m = 1; y++; }
+      }
       return res;
     }
 
+    function parseCSV(text) {
+      const lines = text.trim().split('\n');
+      if (lines.length < 2) return [];
+      const delimiter = lines[0].includes(';') ? ';' : ',';
+      const headers = lines[0].split(delimiter).map(h => h.trim().replace(/^["']|["']$/g, ''));
+      const result = [];
+      for (let i = 1; i < lines.length; i++) {
+        const rowText = lines[i].trim();
+        if (!rowText) continue;
+        const cols = rowText.split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, ''));
+        const rowObj = {};
+        headers.forEach((h, idx) => { rowObj[h] = cols[idx]; });
+        result.push(rowObj);
+      }
+      return result;
+    }
+
     Promise.all([
-      fetch(trveUrl+"?v="+Date.now(),{cache:"no-store"}).then(r=>r.json()),
-      fetch(competitorsUrl+"?v="+Date.now(),{cache:"no-store"}).then(r=>r.json())
+      fetch(trveUrl+"?v="+Date.now(),{cache:"no-store"}).then(r=>r.text()),
+      fetch(competitorsUrl+"?v="+Date.now(),{cache:"no-store"}).then(r=>r.text())
     ])
-    .then(([trveRows, compRows])=>{
-      // TRVE ponctuel -> mensuel (carry-forward)
-      const trvePoints = (trveRows||[])
-        .filter(r=>r.Date && (typeof r.BASE==="number" || typeof r.AVG==="number"))
-        .map(r=>[ymKey(r.Date), (typeof r.BASE==="number") ? r.BASE : r.AVG])
-        .sort((a,b)=>a[0].localeCompare(b[0]));
+    .then(([trveCsvText, compCsvText])=>{
+      const trveRows = parseCSV(trveCsvText);
+      const compRows = parseCSV(compCsvText);
+
+      // TRVE — supporte DATE_DEBUT ou Date, et colonne HC ou BASE
+      const trvePoints = (trveRows || [])
+        .filter(r => (r.DATE_DEBUT || r.Date) && (r.HC || r.BASE) !== undefined)
+        .map(r => {
+          const dateKey = r.DATE_DEBUT || r.Date;
+          const rawVal  = r.HC || r.BASE;
+          const val = Number(String(rawVal).replace(",", "."));
+          return [ymKey(dateKey), val];
+        })
+        .filter(r => !Number.isNaN(r[1]))
+        .sort((a,b) => a[0].localeCompare(b[0]));
 
       const months = monthRange(START_AT, END_AT);
 
-      const valueAtMonth = (k)=>{
-        let last=null;
-        for(const [kk,vv] of trvePoints){ if(kk<=k) last=vv; else break; }
+      const valueAtMonth = (k) => {
+        let last = null;
+        for (const [kk, vv] of trvePoints) { if (kk <= k) last = vv; else break; }
         return last;
       };
 
       const labels   = months.map(ymToLabel);
       const trveVals = months.map(valueAtMonth);
 
-      // Concurrents HC, alignés sur les mêmes mois
+      // Concurrents HC — supporte CompetitorAVG_HC ou CompetitorAVG
       const compIdx = {};
-      (compRows||[]).forEach(r=>{
-        const v = (typeof r.CompetitorAVG_HC==="number") ? r.CompetitorAVG_HC : Number(String(r.CompetitorAVG_HC).replace(",","."));
-        if(!Number.isNaN(v) && r.Date) compIdx[ymKey(r.Date)] = v;
+      (compRows || []).forEach(r => {
+        const dateKey = r.DATE_DEBUT || r.Date;
+        const rawVal  = r.CompetitorAVG_HC || r.CompetitorAVG;
+        const v = Number(String(rawVal).replace(",", "."));
+        if (!Number.isNaN(v) && dateKey) compIdx[ymKey(dateKey)] = v;
       });
       const compVals = months.map(k => (k in compIdx ? compIdx[k] : null));
 
       const ctx = document.getElementById("chart").getContext("2d");
-
       const gTrve = ctx.createLinearGradient(0,0,0,300);
       gTrve.addColorStop(0,"rgba(90, 82, 255, 0.22)");
       gTrve.addColorStop(1,"rgba(90, 82, 255, 0.00)");
@@ -82,19 +115,19 @@
           labels,
           datasets:[
             {
-              label:"TRVE – Tarif réglementé (Base 6 kVA)",
+              label:"TRVE – Tarif réglementé HC (6 kVA)",
               data: trveVals,
               borderColor:"#5a52ff",
               backgroundColor:gTrve,
               borderWidth:1.6,
               pointRadius:0,
               spanGaps:true,
-              stepped:'before',   // escalier
+              stepped:'before',
               tension:0,
               fill:false
             },
             {
-              label:"Prix moyen offres de marché (Engie • TotalEnergies • OHM Énergie • Primeo Énergie)",
+              label:"Prix moyen offres de marché HC (Engie • TotalEnergies • OHM Énergie • Primeo Énergie)",
               data: compVals,
               borderColor:"#334155",
               backgroundColor:"transparent",
