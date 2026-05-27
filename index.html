@@ -17,7 +17,7 @@
 <body>
   <div class="chart-wrapper">
     <h1>Évolution du prix du kWh — TRVE vs Offres de marché</h1>
-    <div class="legend-note">Profil particulier • Offre (Heures Creuses) • Base <strong>6 kVA</strong> • Unités : €/kWh <strong>TTC</strong></div>
+    <div class="legend-note">Profil particulier • Offre (Heures Creuses) • <strong>6 kVA</strong> • Unités : €/kWh <strong>TTC</strong></div>
     <canvas id="chart"></canvas>
   </div>
 
@@ -73,10 +73,10 @@
 
       // TRVE — supporte DATE_DEBUT ou Date, et colonne HC ou BASE
       const trvePoints = (trveRows || [])
-        .filter(r => (r.DATE_DEBUT || r.Date) && (r.HC || r.BASE) !== undefined)
+        .filter(r => (r.DATE_DEBUT || r.Date) && (r.PART_VARIABLE_HC_TTC || r.HC || r.BASE) !== undefined)
         .map(r => {
           const dateKey = r.DATE_DEBUT || r.Date;
-          const rawVal  = r.HC || r.BASE;
+          const rawVal  = r.PART_VARIABLE_HC_TTC || r.HC || r.BASE;
           const val = Number(String(rawVal).replace(",", "."));
           return [ymKey(dateKey), val];
         })
